@@ -90,7 +90,16 @@ def send(vk, peer_id: int, text: str, keyboard: VkKeyboard | None = None) -> Non
     }
     if keyboard:
         params["keyboard"] = keyboard.get_keyboard()
-    vk.messages.send(**params)
+    try:
+        vk.messages.send(**params)
+    except vk_api.exceptions.ApiError as exc:
+        # 912 = в группе не включены «Возможности ботов» (клавиатуры)
+        if exc.code == 912 and keyboard:
+            logger.warning("Клавиатура недоступна (ошибка 912) — отправляю текстом")
+            params.pop("keyboard", None)
+            vk.messages.send(**params)
+        else:
+            raise
 
 
 def main_menu_kb() -> VkKeyboard:
@@ -444,6 +453,12 @@ def check_setup(vk) -> None:
             ) from exc
         raise
 
+    logger.info("Группа «%s» — Long Poll OK", name)
+    logger.info(
+        "Если кнопки не работают: Сообщения → Настройки для бота → "
+        "«Возможности ботов» → ВКЛ"
+    )
+
 
 def listen_loop(vk, longpoll) -> None:
     for event in longpoll.listen():
@@ -494,20 +509,22 @@ def start_health_server(port: int) -> None:
 
 
 def main() -> None:
-    port = int(os.environ.get("PORT", 8080))
-    threading.Thread(target=start_health_server, args=(port,), daemon=True).start()
-
     vk_session = vk_api.VkApi(token=VK_TOKEN)
     vk = vk_session.get_api()
     check_setup(vk)
     longpoll = VkBotLongPoll(vk_session, VK_GROUP_ID)
 
-    threading.Thread(target=listen_loop, args=(vk, longpoll), daemon=True).start()
-    logger.info("VK-бот Beauty Studio запущен (группа %s)", VK_GROUP_ID)
-
-    import time
-    while True:
-        time.sleep(3600)
+    if os.getenv("PORT"):
+        port = int(os.environ["PORT"])
+        threading.Thread(target=start_health_server, args=(port,), daemon=True).start()
+        threading.Thread(target=listen_loop, args=(vk, longpoll), daemon=True).start()
+        logger.info("VK-бот на Render (группа %s)", VK_GROUP_ID)
+        import time
+        while True:
+            time.sleep(3600)
+    else:
+        logger.info("VK-бот локально (группа %s) — пиши «привет» в группу", VK_GROUP_ID)
+        listen_loop(vk, longpoll)
 
 
 if __name__ == "__main__":
