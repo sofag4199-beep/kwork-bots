@@ -22,17 +22,23 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-VK_TOKEN = os.getenv("VK_TOKEN")
-VK_GROUP_ID = os.getenv("VK_GROUP_ID")
-OWNER_ID = os.getenv("OWNER_ID")
+VK_TOKEN = (os.getenv("VK_TOKEN") or "").strip()
+VK_GROUP_ID = (os.getenv("VK_GROUP_ID") or "").strip()
+OWNER_ID = (os.getenv("OWNER_ID") or "").strip()
 
 if not VK_TOKEN:
-    raise ValueError("Укажи VK_TOKEN в файле .env")
+    raise ValueError("Укажи VK_TOKEN (Render → Environment или .env)")
 if not VK_GROUP_ID:
-    raise ValueError("Укажи VK_GROUP_ID в файле .env")
+    raise ValueError("Укажи VK_GROUP_ID (должно быть 240240392)")
 
-VK_GROUP_ID = int(VK_GROUP_ID)
+try:
+    VK_GROUP_ID = int(VK_GROUP_ID)
+except ValueError as exc:
+    raise ValueError(f"VK_GROUP_ID должен быть числом, сейчас: {VK_GROUP_ID!r}") from exc
+
 OWNER_ID = int(OWNER_ID) if OWNER_ID else None
+
+logger.info("Старт: group_id=%s, token=%s...", VK_GROUP_ID, VK_TOKEN[:12])
 
 BOOKINGS_FILE = Path(__file__).parent / "bookings.json"
 
@@ -362,14 +368,28 @@ def ack_event(vk, event) -> None:
         logger.debug("Event ack: %s", exc)
 
 
+def get_group_info(vk) -> dict:
+    result = vk.groups.getById(group_id=VK_GROUP_ID)
+    if isinstance(result, dict) and "groups" in result:
+        return result["groups"][0]
+    if isinstance(result, list) and result:
+        return result[0]
+    raise RuntimeError(f"Неожиданный ответ VK API: {result!r}")
+
+
 def check_setup(vk) -> None:
     """Проверка токена и группы перед запуском."""
     try:
-        info = vk.groups.getById(group_id=VK_GROUP_ID)[0]
+        info = get_group_info(vk)
+    except vk_api.exceptions.ApiError as exc:
+        raise SystemExit(
+            f"❌ VK API ошибка [{exc.code}]: {exc}\n"
+            f"Проверь VK_TOKEN и VK_GROUP_ID={VK_GROUP_ID}"
+        ) from exc
     except Exception as exc:
         raise SystemExit(
-            "❌ Не удалось получить данные группы.\n"
-            "Проверь VK_TOKEN и VK_GROUP_ID в файле .env"
+            f"❌ Не удалось получить данные группы: {exc}\n"
+            f"Проверь VK_TOKEN и VK_GROUP_ID={VK_GROUP_ID}"
         ) from exc
 
     name = info.get("name", "")
@@ -439,14 +459,16 @@ class _HealthHandler(BaseHTTPRequestHandler):
         pass
 
 
-def start_health_server() -> None:
-    port = int(os.environ.get("PORT", 8080))
+def start_health_server(port: int) -> None:
     server = HTTPServer(("0.0.0.0", port), _HealthHandler)
     logger.info("Health server on port %s", port)
     server.serve_forever()
 
 
 def main() -> None:
+    port = int(os.environ.get("PORT", 8080))
+    threading.Thread(target=start_health_server, args=(port,), daemon=True).start()
+
     vk_session = vk_api.VkApi(token=VK_TOKEN)
     vk = vk_session.get_api()
     check_setup(vk)
@@ -454,7 +476,10 @@ def main() -> None:
 
     threading.Thread(target=listen_loop, args=(vk, longpoll), daemon=True).start()
     logger.info("VK-бот Beauty Studio запущен (группа %s)", VK_GROUP_ID)
-    start_health_server()
+
+    import time
+    while True:
+        time.sleep(3600)
 
 
 if __name__ == "__main__":
