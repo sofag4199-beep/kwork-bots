@@ -3,11 +3,34 @@ services:
     name: beauty-demo-bot
     runtime: python
     plan: free
+    region: frankfurt
     rootDir: bots/salon-booking
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
+    healthCheckPath: /
     envVars:
       - key: BOT_TOKEN
         sync: false
       - key: OWNER_ID
         sync: false
+      - key: PYTHON_VERSION
+        value: "3.12.10"
+
+  - type: web
+    name: vk-beauty-bot
+    runtime: python
+    plan: free
+    region: frankfurt
+    rootDir: bots/vk-salon-booking
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    healthCheckPath: /
+    envVars:
+      - key: VK_TOKEN
+        sync: false
+      - key: VK_GROUP_ID
+        value: "240240392"
+      - key: OWNER_ID
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.12.10"
