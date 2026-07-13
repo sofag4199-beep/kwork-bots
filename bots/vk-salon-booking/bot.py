@@ -94,65 +94,39 @@ def send(vk, peer_id: int, text: str, keyboard: VkKeyboard | None = None) -> Non
 
 
 def main_menu_kb() -> VkKeyboard:
-    kb = VkKeyboard(one_time=False, inline=True)
-    kb.add_callback_button(
-        "📅 Записаться",
-        color=VkKeyboardColor.POSITIVE,
-        payload={"cmd": "book"},
-    )
+    kb = VkKeyboard(one_time=False)
+    kb.add_button("Записаться", color=VkKeyboardColor.POSITIVE)
+    kb.add_button("Услуги", color=VkKeyboardColor.PRIMARY)
     kb.add_line()
-    kb.add_callback_button(
-        "💅 Услуги",
-        color=VkKeyboardColor.PRIMARY,
-        payload={"cmd": "services"},
-    )
-    kb.add_callback_button(
-        "📍 Контакты",
-        color=VkKeyboardColor.PRIMARY,
-        payload={"cmd": "contacts"},
-    )
-    kb.add_line()
-    kb.add_callback_button(
-        "❓ Как записаться",
-        color=VkKeyboardColor.SECONDARY,
-        payload={"cmd": "howto"},
-    )
+    kb.add_button("Контакты", color=VkKeyboardColor.PRIMARY)
+    kb.add_button("Как записаться", color=VkKeyboardColor.SECONDARY)
     return kb
 
 
 def services_kb() -> VkKeyboard:
-    kb = VkKeyboard(one_time=False, inline=True)
+    kb = VkKeyboard(one_time=False)
     for key, service in SERVICES.items():
-        kb.add_callback_button(
-            f"{service['name']} — {service['price']}",
-            color=VkKeyboardColor.PRIMARY,
-            payload={"cmd": "service", "key": key},
-        )
+        kb.add_button(service["name"], color=VkKeyboardColor.PRIMARY)
         kb.add_line()
-    kb.add_callback_button("◀️ Назад", color=VkKeyboardColor.SECONDARY, payload={"cmd": "main"})
+    kb.add_button("В меню", color=VkKeyboardColor.SECONDARY)
     return kb
 
 
 def time_kb() -> VkKeyboard:
-    kb = VkKeyboard(one_time=False, inline=True)
+    kb = VkKeyboard(one_time=False)
     for i, slot in enumerate(TIME_SLOTS):
         if i and i % 2 == 0:
             kb.add_line()
-        kb.add_callback_button(
-            slot,
-            color=VkKeyboardColor.PRIMARY,
-            payload={"cmd": "time", "slot": slot},
-        )
+        kb.add_button(slot, color=VkKeyboardColor.PRIMARY)
     kb.add_line()
-    kb.add_callback_button("◀️ Назад", color=VkKeyboardColor.SECONDARY, payload={"cmd": "book"})
+    kb.add_button("Назад", color=VkKeyboardColor.SECONDARY)
     return kb
 
 
 def back_main_kb() -> VkKeyboard:
-    kb = VkKeyboard(one_time=False, inline=True)
-    kb.add_callback_button("📅 Записаться", color=VkKeyboardColor.POSITIVE, payload={"cmd": "book"})
-    kb.add_line()
-    kb.add_callback_button("◀️ В меню", color=VkKeyboardColor.SECONDARY, payload={"cmd": "main"})
+    kb = VkKeyboard(one_time=False)
+    kb.add_button("Записаться", color=VkKeyboardColor.POSITIVE)
+    kb.add_button("В меню", color=VkKeyboardColor.SECONDARY)
     return kb
 
 
@@ -312,6 +286,7 @@ def handle_payload(vk, user_id: int, peer_id: int, payload: dict) -> None:
 
 def handle_text(vk, user_id: int, peer_id: int, text: str) -> None:
     lowered = text.lower().strip()
+    logger.info("Сообщение от %s: %s", user_id, text)
 
     if OWNER_ID and user_id == OWNER_ID and lowered in ("записи", "/записи", "bookings"):
         bookings = load_bookings()
@@ -349,9 +324,61 @@ def handle_text(vk, user_id: int, peer_id: int, text: str) -> None:
         finish_booking(vk, peer_id, user_id, phone)
         return
 
-    if lowered in ("начать", "start", "привет", "меню", "hello", "/start"):
+    if lowered in ("начать", "start", "привет", "меню", "hello", "/start", "в меню"):
         clear_state(user_id)
         show_main(vk, peer_id)
+        return
+
+    if lowered in ("записаться", "назад"):
+        if lowered == "назад" and step == "choosing_service":
+            show_main(vk, peer_id)
+            return
+        state["step"] = "choosing_service"
+        state["data"] = {}
+        send(vk, peer_id, "💅 Выберите услугу:", services_kb())
+        return
+
+    if lowered == "услуги":
+        show_services(vk, peer_id)
+        return
+
+    if lowered == "контакты":
+        show_contacts(vk, peer_id)
+        return
+
+    if lowered == "как записаться":
+        show_howto(vk, peer_id)
+        return
+
+    if step == "choosing_service":
+        for key, service in SERVICES.items():
+            if text.strip() == service["name"]:
+                state["step"] = "choosing_time"
+                state["data"] = {
+                    "service_key": key,
+                    "service_name": service["name"],
+                }
+                send(
+                    vk,
+                    peer_id,
+                    f"✅ Услуга: {service['name']} ({service['price']})\n\n🕐 Выберите удобное время:",
+                    time_kb(),
+                )
+                return
+        send(vk, peer_id, "Выберите услугу из кнопок:", services_kb())
+        return
+
+    if step == "choosing_time":
+        if lowered == "назад":
+            state["step"] = "choosing_service"
+            send(vk, peer_id, "💅 Выберите услугу:", services_kb())
+            return
+        if text.strip() in TIME_SLOTS:
+            state["step"] = "entering_name"
+            state["data"]["time_slot"] = text.strip()
+            send(vk, peer_id, f"🕐 Время: {text.strip()}\n\nВведите ваше имя:")
+            return
+        send(vk, peer_id, "Выберите время из кнопок:", time_kb())
         return
 
     show_main(vk, peer_id)
@@ -426,6 +453,7 @@ def listen_loop(vk, longpoll) -> None:
                 user_id = message["from_id"]
                 peer_id = message["peer_id"]
                 text = (message.get("text") or "").strip()
+                logger.info("Событие MESSAGE_NEW peer=%s user=%s", peer_id, user_id)
 
                 if text:
                     handle_text(vk, user_id, peer_id, text)
